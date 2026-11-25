@@ -13,7 +13,7 @@ enum Block {
         inlines: Vec<Inline>,
     },
     Paragraph {
-        inlines: Vec<Inline>,
+        lines: Vec<Vec<Inline>>,
     },
     DisplayMath {
         latex: String,
@@ -436,8 +436,8 @@ fn parse_blocks(input: &str) -> Vec<Block> {
             continue;
         }
 
-        // Paragraph: collect consecutive plain lines
-        let mut para_parts = Vec::new();
+        // Paragraph: collect consecutive plain lines, preserving single-Enter line breaks
+        let mut para_lines = Vec::new();
         while i < lines.len() {
             let l = lines[i];
             let lt = l.trim();
@@ -451,12 +451,10 @@ fn parse_blocks(input: &str) -> Vec<Block> {
             {
                 break;
             }
-            para_parts.push(lt);
+            para_lines.push(parse_inlines(lt));
             i += 1;
         }
-        blocks.push(Block::Paragraph {
-            inlines: parse_inlines(&para_parts.join(" ")),
-        });
+        blocks.push(Block::Paragraph { lines: para_lines });
     }
 
     blocks
@@ -577,14 +575,18 @@ fn measure_word<T: Text>(
     {
         let size = layout.size();
         let pad = if code { font_size * 0.22 } else { 0.0 };
+        let mut w = size.width.max(layout.trailing_whitespace_width());
+        if w <= 0.0 && word.chars().all(char::is_whitespace) {
+            w = word.chars().count() as f64 * font_size * 0.28;
+        }
         if let Some(lm) = layout.line_metric(0) {
             return (
-                size.width + pad,
+                w + pad,
                 lm.baseline.max(font_size * 0.7),
                 (lm.height - lm.baseline).max(font_size * 0.2),
             );
         }
-        return (size.width + pad, size.height * 0.8, size.height * 0.2);
+        return (w + pad, size.height * 0.8, size.height * 0.2);
     }
     (
         word.chars().count() as f64 * font_size * 0.5,
@@ -880,12 +882,18 @@ pub fn measure_markdown<T: Text>(piet_text: &mut T, text: &str, style: &TextStyl
                 total_w = total_w.max(w);
                 total_h += h + if *level <= 2 { fs * 0.2 } else { 0.0 };
             }
-            Block::Paragraph { inlines } => {
-                let atoms = tokenize_inlines(piet_text, inlines, fs, false, style);
-                let lines = wrap_atoms(atoms, max_w_limit, fs);
-                let (w, h) = measure_wrapped_lines(&lines, fs);
-                total_w = total_w.max(w);
-                total_h += h;
+            Block::Paragraph { lines: para_lines } => {
+                let line_gap = fs * 0.22;
+                for (li, l_inlines) in para_lines.iter().enumerate() {
+                    let atoms = tokenize_inlines(piet_text, l_inlines, fs, false, style);
+                    let wrapped = wrap_atoms(atoms, max_w_limit, fs);
+                    let (w, h) = measure_wrapped_lines(&wrapped, fs);
+                    total_w = total_w.max(w);
+                    total_h += h;
+                    if li + 1 < para_lines.len() {
+                        total_h += line_gap;
+                    }
+                }
             }
             Block::DisplayMath { latex } => {
                 let m = latex::measure_latex(piet_text, latex, fs * 1.15, true, &style.font_family);
@@ -988,11 +996,17 @@ pub fn draw_markdown(
                     y += fs * 0.2;
                 }
             }
-            Block::Paragraph { inlines } => {
-                let atoms = tokenize_inlines(cx.text(), inlines, fs, false, style);
-                let lines = wrap_atoms(atoms, max_w_limit, fs);
-                let (_w, next_y) = draw_wrapped_lines(cx, &lines, 0.0, y, box_w, fs, style);
-                y = next_y;
+            Block::Paragraph { lines: para_lines } => {
+                let line_gap = fs * 0.22;
+                for (li, l_inlines) in para_lines.iter().enumerate() {
+                    let atoms = tokenize_inlines(cx.text(), l_inlines, fs, false, style);
+                    let wrapped = wrap_atoms(atoms, max_w_limit, fs);
+                    let (_w, next_y) = draw_wrapped_lines(cx, &wrapped, 0.0, y, box_w, fs, style);
+                    y = next_y;
+                    if li + 1 < para_lines.len() {
+                        y += line_gap;
+                    }
+                }
             }
             Block::DisplayMath { latex } => {
                 let m_fs = fs * 1.15;
@@ -1197,5 +1211,29 @@ let x = 1;
         );
         assert!(size.x > 50.0);
         assert!(size.y > 50.0);
+    }
+
+    #[test]
+    fn single_newline_preserves_line_break() {
+        let blocks = parse_blocks("Zeile 1\nZeile 2\nZeile 3");
+        match &blocks[0] {
+            Block::Paragraph { lines } => assert_eq!(lines.len(), 3),
+            other => panic!("Expected Paragraph, got {other:?}"),
+        }
+
+        let mut text = piet_cairo::CairoText::new();
+        let style = TextStyle::default();
+        let single = measure_markdown(&mut text, "Zeile 1", &style);
+        let multi = measure_markdown(&mut text, "Zeile 1\nZeile 2\nZeile 3", &style);
+        assert!(multi.y > 2.0 * single.y);
+    }
+
+    #[test]
+    fn space_between_math_and_text_has_width() {
+        let mut text = piet_cairo::CairoText::new();
+        let style = TextStyle::default();
+        let no_space = measure_markdown(&mut text, "$f(x)$f", &style);
+        let with_space = measure_markdown(&mut text, "$f(x)$ f", &style);
+        assert!(with_space.x > no_space.x);
     }
 }
