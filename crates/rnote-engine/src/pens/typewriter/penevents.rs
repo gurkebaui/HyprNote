@@ -45,9 +45,13 @@ impl Typewriter {
                 {
                     // When clicked on a textstroke, we start modifying it
                     if let Some(Stroke::TextStroke(textstroke)) =
-                        engine_view.store.get_stroke_ref(stroke_key)
+                        engine_view.store.get_stroke_mut(stroke_key)
                     {
-                        let cursor = if let Ok(new_cursor) =
+                        let was_markdown = textstroke.should_render_markdown();
+                        textstroke.editing = true;
+                        let cursor = if was_markdown {
+                            GraphemeCursor::new(textstroke.text.len(), textstroke.text.len(), true)
+                        } else if let Ok(new_cursor) =
                             // get the cursor for the current position
                             textstroke.get_cursor_for_global_coord(element.pos)
                         {
@@ -56,6 +60,12 @@ impl Typewriter {
                             GraphemeCursor::new(0, textstroke.text.len(), true)
                         };
 
+                        engine_view.store.update_geometry_for_stroke(stroke_key);
+                        engine_view.store.regenerate_rendering_for_stroke(
+                            stroke_key,
+                            engine_view.camera.viewport(),
+                            engine_view.camera.image_scale(),
+                        );
                         engine_view.store.update_chrono_to_last(stroke_key);
 
                         new_state = TypewriterState::Modifying {
@@ -171,6 +181,13 @@ impl Typewriter {
                                 }
                             } else {
                                 // If we click outside, reset to idle
+                                Self::set_stroke_editing(
+                                    engine_view.store,
+                                    *stroke_key,
+                                    false,
+                                    engine_view.camera,
+                                );
+                                widget_flags.redraw = true;
                                 self.state = TypewriterState::Idle;
                                 progress = PenProgress::Finished;
                             }
@@ -271,6 +288,13 @@ impl Typewriter {
                                 }
                             } else {
                                 // If we click outside, reset to idle
+                                Self::set_stroke_editing(
+                                    engine_view.store,
+                                    *stroke_key,
+                                    false,
+                                    engine_view.camera,
+                                );
+                                widget_flags.redraw = true;
                                 self.state = TypewriterState::Idle;
                                 progress = PenProgress::Finished;
                             }
@@ -548,7 +572,9 @@ impl Typewriter {
                     KeyboardKey::Unicode(keychar) => {
                         text_style.ranged_text_attributes.clear();
                         text_style.set_max_width(Some(text_width));
-                        let textstroke = TextStroke::new(String::from(keychar), *pos, text_style);
+                        let mut textstroke =
+                            TextStroke::new(String::from(keychar), *pos, text_style);
+                        textstroke.editing = true;
                         let mut cursor = GraphemeCursor::new(0, textstroke.text.len(), true);
 
                         textstroke.move_cursor_forward(&mut cursor);
@@ -1140,7 +1166,8 @@ impl Typewriter {
                 text_style.ranged_text_attributes.clear();
                 text_style.set_max_width(Some(text_width));
                 let text_len = text.len();
-                let textstroke = TextStroke::new(text, *pos, text_style);
+                let mut textstroke = TextStroke::new(text, *pos, text_style);
+                textstroke.editing = true;
                 let cursor = GraphemeCursor::new(text_len, text_len, true);
 
                 let stroke_key = engine_view
@@ -1276,9 +1303,9 @@ impl Typewriter {
     pub(super) fn handle_pen_event_cancel(
         &mut self,
         _now: Instant,
-        _engine_view: &mut EngineViewMut,
+        engine_view: &mut EngineViewMut,
     ) -> (EventResult<PenProgress>, WidgetFlags) {
-        let widget_flags = WidgetFlags::default();
+        let mut widget_flags = WidgetFlags::default();
         self.pos = None;
 
         let event_result = match &mut self.state {
@@ -1288,6 +1315,15 @@ impl Typewriter {
                 progress: PenProgress::Idle,
             },
             _ => {
+                if let TypewriterState::Modifying { stroke_key, .. } = &self.state {
+                    Self::set_stroke_editing(
+                        engine_view.store,
+                        *stroke_key,
+                        false,
+                        engine_view.camera,
+                    );
+                    widget_flags.redraw = true;
+                }
                 self.state = TypewriterState::Idle;
 
                 EventResult {

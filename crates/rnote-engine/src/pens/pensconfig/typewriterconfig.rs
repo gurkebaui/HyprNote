@@ -13,8 +13,10 @@ pub struct TypewriterConfig {
 
 impl Default for TypewriterConfig {
     fn default() -> Self {
+        let mut text_style = TextStyle::default();
+        text_style.markdown_enabled = true;
         Self {
-            text_style: TextStyle::default(),
+            text_style,
             text_width: Self::TEXT_WIDTH_DEFAULT,
         }
     }

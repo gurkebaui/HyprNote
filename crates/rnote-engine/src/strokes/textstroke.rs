@@ -200,6 +200,8 @@ pub struct TextStyle {
 
     #[serde(rename = "ranged_text_attributes")]
     pub ranged_text_attributes: Vec<RangedTextAttribute>,
+    #[serde(rename = "markdown_enabled", default)]
+    pub markdown_enabled: bool,
 }
 
 impl Default for TextStyle {
@@ -213,6 +215,7 @@ impl Default for TextStyle {
             max_width: None,
             alignment: TextAlignment::Start,
             ranged_text_attributes: vec![],
+            markdown_enabled: false,
         }
     }
 }
@@ -445,6 +448,9 @@ pub struct TextStroke {
     pub affine: DAffine2,
     #[serde(rename = "text_style")]
     pub text_style: TextStyle,
+    /// True while the typewriter is actively editing this stroke (shows raw Markdown/LaTeX source).
+    #[serde(skip)]
+    pub editing: bool,
 }
 
 impl Default for TextStroke {
@@ -453,6 +459,7 @@ impl Default for TextStroke {
             text: String::default(),
             affine: DAffine2::IDENTITY,
             text_style: TextStyle::default(),
+            editing: false,
         }
     }
 }
@@ -473,17 +480,29 @@ impl Transformable for TextStroke {
 
 impl Shapeable for TextStroke {
     fn bounds(&self) -> Aabb {
-        let untransformed_size = self
-            .text_style
-            .untransformed_size(&mut piet_cairo::CairoText::new(), self.text.clone())
-            .unwrap_or(Vector2::splat(self.text_style.font_size))
-            .maxs(&Vector2::splat(1.));
+        let untransformed_size = if self.should_render_markdown() {
+            super::markdown::measure_markdown(
+                &mut piet_cairo::CairoText::new(),
+                &self.text,
+                &self.text_style,
+            )
+            .maxs(&Vector2::splat(1.))
+        } else {
+            self.text_style
+                .untransformed_size(&mut piet_cairo::CairoText::new(), self.text.clone())
+                .unwrap_or(Vector2::splat(self.text_style.font_size))
+                .maxs(&Vector2::splat(1.))
+        };
 
         self.affine
             .transform_aabb(Aabb::new(Vector2::ZERO, untransformed_size))
     }
 
     fn hitboxes(&self) -> Vec<Aabb> {
+        if self.should_render_markdown() {
+            return vec![self.bounds()];
+        }
+
         let text_layout = match self
             .text_style
             .build_text_layout(&mut piet_cairo::CairoText::new(), self.text.clone())
@@ -526,7 +545,10 @@ impl Drawable for TextStroke {
     fn draw(&self, cx: &mut impl RenderContext, _image_scale: f64) -> anyhow::Result<()> {
         cx.save().map_err(|e| anyhow::anyhow!("{e:?}"))?;
 
-        if let Ok(text_layout) = self
+        if self.should_render_markdown() {
+            cx.transform(self.affine.to_kurbo());
+            super::markdown::draw_markdown(cx, &self.text, &self.text_style)?;
+        } else if let Ok(text_layout) = self
             .text_style
             .build_text_layout(cx.text(), self.text.clone())
         {
@@ -545,7 +567,12 @@ impl TextStroke {
             text,
             affine: DAffine2::from_translation(upper_left_pos),
             text_style,
+            editing: false,
         }
+    }
+
+    pub fn should_render_markdown(&self) -> bool {
+        self.text_style.markdown_enabled && !self.editing && !self.text.is_empty()
     }
 
     pub fn get_text_slice_for_range(&self, range: Range<usize>) -> &str {

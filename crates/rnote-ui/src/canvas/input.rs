@@ -1,6 +1,6 @@
 // Imports
 use super::RnCanvas;
-use gtk4::{Native, gdk, glib, graphene, prelude::*};
+use gtk4::{Native, gdk, glib, graphene, prelude::*, subclass::prelude::ObjectSubclassIsExt};
 use p2d::math::Vector2;
 use rnote_compose::penevent::{KeyboardKey, ModifierKey, PenEvent, PenState, ShortcutKey};
 use rnote_compose::penpath::Element;
@@ -261,6 +261,29 @@ pub(crate) fn handle_key_controller_key_pressed(
     trace!("canvas event key pressed - gdk_key: {gdk_key:?}, gdk_modifiers: {gdk_modifiers:?}");
     canvas.grab_focus();
 
+    if canvas.imp().text_input_enabled.get()
+        && !gdk_modifiers.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK)
+    {
+        match process_dead_key(canvas.imp().dead_key_composer.get(), gdk_key) {
+            DeadKeyAction::ConsumedPending(dk) => {
+                canvas.imp().dead_key_composer.set(Some(dk));
+                return glib::Propagation::Stop;
+            }
+            DeadKeyAction::CommitText(text) => {
+                canvas.imp().dead_key_composer.set(None);
+                handle_imcontext_text_commit(canvas, &text);
+                return glib::Propagation::Stop;
+            }
+            DeadKeyAction::PassThrough { clear_pending } => {
+                if clear_pending {
+                    canvas.imp().dead_key_composer.set(None);
+                }
+            }
+        }
+    } else {
+        canvas.imp().dead_key_composer.set(None);
+    }
+
     let now = Instant::now();
     let keyboard_key = retrieve_keyboard_key(gdk_key);
     let modifier_keys = retrieve_modifier_keys(gdk_modifiers);
@@ -294,6 +317,7 @@ pub(crate) fn handle_key_controller_key_released(
 }
 
 pub(crate) fn handle_imcontext_text_commit(canvas: &RnCanvas, text: &str) {
+    canvas.imp().dead_key_composer.set(None);
     let now = Instant::now();
 
     let (_ep, widget_flags) = canvas.engine_mut().handle_pen_event(
@@ -304,6 +328,213 @@ pub(crate) fn handle_imcontext_text_commit(canvas: &RnCanvas, text: &str) {
         now,
     );
     canvas.emit_handle_widget_flags(widget_flags);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeadKey {
+    Acute,
+    Grave,
+    Circumflex,
+    Tilde,
+    Diaeresis,
+    Cedilla,
+    Ring,
+    Caron,
+    Macron,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DeadKeyAction {
+    PassThrough { clear_pending: bool },
+    ConsumedPending(DeadKey),
+    CommitText(String),
+}
+
+impl DeadKey {
+    pub(crate) fn from_gdk_key(key: gdk::Key) -> Option<Self> {
+        match key {
+            gdk::Key::dead_acute => Some(Self::Acute),
+            gdk::Key::dead_grave => Some(Self::Grave),
+            gdk::Key::dead_circumflex => Some(Self::Circumflex),
+            gdk::Key::dead_tilde => Some(Self::Tilde),
+            gdk::Key::dead_diaeresis => Some(Self::Diaeresis),
+            gdk::Key::dead_cedilla => Some(Self::Cedilla),
+            gdk::Key::dead_abovering => Some(Self::Ring),
+            gdk::Key::dead_caron => Some(Self::Caron),
+            gdk::Key::dead_macron => Some(Self::Macron),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn standalone_char(self) -> char {
+        match self {
+            Self::Acute => '´',
+            Self::Grave => '`',
+            Self::Circumflex => '^',
+            Self::Tilde => '~',
+            Self::Diaeresis => '¨',
+            Self::Cedilla => '¸',
+            Self::Ring => '°',
+            Self::Caron => 'ˇ',
+            Self::Macron => '¯',
+        }
+    }
+
+    pub(crate) fn compose(self, ch: char) -> Option<char> {
+        if ch == ' ' {
+            return Some(self.standalone_char());
+        }
+        match (self, ch) {
+            (Self::Acute, 'a') => Some('á'),
+            (Self::Acute, 'e') => Some('é'),
+            (Self::Acute, 'i') => Some('í'),
+            (Self::Acute, 'o') => Some('ó'),
+            (Self::Acute, 'u') => Some('ú'),
+            (Self::Acute, 'y') => Some('ý'),
+            (Self::Acute, 'A') => Some('Á'),
+            (Self::Acute, 'E') => Some('É'),
+            (Self::Acute, 'I') => Some('Í'),
+            (Self::Acute, 'O') => Some('Ó'),
+            (Self::Acute, 'U') => Some('Ú'),
+            (Self::Acute, 'Y') => Some('Ý'),
+            (Self::Acute, 'c') => Some('ć'),
+            (Self::Acute, 'C') => Some('Ć'),
+            (Self::Acute, 'n') => Some('ń'),
+            (Self::Acute, 'N') => Some('Ń'),
+            (Self::Acute, 's') => Some('ś'),
+            (Self::Acute, 'S') => Some('Ś'),
+            (Self::Acute, 'z') => Some('ź'),
+            (Self::Acute, 'Z') => Some('Ź'),
+
+            (Self::Grave, 'a') => Some('à'),
+            (Self::Grave, 'e') => Some('è'),
+            (Self::Grave, 'i') => Some('ì'),
+            (Self::Grave, 'o') => Some('ò'),
+            (Self::Grave, 'u') => Some('ù'),
+            (Self::Grave, 'A') => Some('À'),
+            (Self::Grave, 'E') => Some('È'),
+            (Self::Grave, 'I') => Some('Ì'),
+            (Self::Grave, 'O') => Some('Ò'),
+            (Self::Grave, 'U') => Some('Ù'),
+
+            (Self::Circumflex, 'a') => Some('â'),
+            (Self::Circumflex, 'e') => Some('ê'),
+            (Self::Circumflex, 'i') => Some('î'),
+            (Self::Circumflex, 'o') => Some('ô'),
+            (Self::Circumflex, 'u') => Some('û'),
+            (Self::Circumflex, 'A') => Some('Â'),
+            (Self::Circumflex, 'E') => Some('Ê'),
+            (Self::Circumflex, 'I') => Some('Î'),
+            (Self::Circumflex, 'O') => Some('Ô'),
+            (Self::Circumflex, 'U') => Some('Û'),
+
+            (Self::Tilde, 'a') => Some('ã'),
+            (Self::Tilde, 'n') => Some('ñ'),
+            (Self::Tilde, 'o') => Some('õ'),
+            (Self::Tilde, 'A') => Some('Ã'),
+            (Self::Tilde, 'N') => Some('Ñ'),
+            (Self::Tilde, 'O') => Some('Õ'),
+
+            (Self::Diaeresis, 'a') => Some('ä'),
+            (Self::Diaeresis, 'e') => Some('ë'),
+            (Self::Diaeresis, 'i') => Some('ï'),
+            (Self::Diaeresis, 'o') => Some('ö'),
+            (Self::Diaeresis, 'u') => Some('ü'),
+            (Self::Diaeresis, 'y') => Some('ÿ'),
+            (Self::Diaeresis, 'A') => Some('Ä'),
+            (Self::Diaeresis, 'E') => Some('Ë'),
+            (Self::Diaeresis, 'I') => Some('Ï'),
+            (Self::Diaeresis, 'O') => Some('Ö'),
+            (Self::Diaeresis, 'U') => Some('Ü'),
+            (Self::Diaeresis, 'Y') => Some('Ÿ'),
+
+            (Self::Cedilla, 'c') => Some('ç'),
+            (Self::Cedilla, 'C') => Some('Ç'),
+
+            (Self::Ring, 'a') => Some('å'),
+            (Self::Ring, 'A') => Some('Å'),
+
+            (Self::Caron, 'c') => Some('č'),
+            (Self::Caron, 's') => Some('š'),
+            (Self::Caron, 'z') => Some('ž'),
+            (Self::Caron, 'r') => Some('ř'),
+            (Self::Caron, 'C') => Some('Č'),
+            (Self::Caron, 'S') => Some('Š'),
+            (Self::Caron, 'Z') => Some('Ž'),
+            (Self::Caron, 'R') => Some('Ř'),
+
+            (Self::Macron, 'a') => Some('ā'),
+            (Self::Macron, 'e') => Some('ē'),
+            (Self::Macron, 'i') => Some('ī'),
+            (Self::Macron, 'o') => Some('ō'),
+            (Self::Macron, 'u') => Some('ū'),
+            (Self::Macron, 'A') => Some('Ā'),
+            (Self::Macron, 'E') => Some('Ē'),
+            (Self::Macron, 'I') => Some('Ī'),
+            (Self::Macron, 'O') => Some('Ō'),
+            (Self::Macron, 'U') => Some('Ū'),
+
+            _ => None,
+        }
+    }
+}
+
+fn is_modifier_only_key(key: gdk::Key) -> bool {
+    matches!(
+        key,
+        gdk::Key::Shift_L
+            | gdk::Key::Shift_R
+            | gdk::Key::Control_L
+            | gdk::Key::Control_R
+            | gdk::Key::Alt_L
+            | gdk::Key::Alt_R
+            | gdk::Key::Super_L
+            | gdk::Key::Super_R
+            | gdk::Key::ISO_Level3_Shift
+            | gdk::Key::ISO_Level5_Shift
+            | gdk::Key::Caps_Lock
+    )
+}
+
+pub(crate) fn process_dead_key(pending: Option<DeadKey>, gdk_key: gdk::Key) -> DeadKeyAction {
+    match pending {
+        None => {
+            if let Some(dk) = DeadKey::from_gdk_key(gdk_key) {
+                DeadKeyAction::ConsumedPending(dk)
+            } else {
+                DeadKeyAction::PassThrough {
+                    clear_pending: false,
+                }
+            }
+        }
+        Some(dk) => {
+            if is_modifier_only_key(gdk_key) {
+                return DeadKeyAction::PassThrough {
+                    clear_pending: false,
+                };
+            }
+            if DeadKey::from_gdk_key(gdk_key) == Some(dk) {
+                return DeadKeyAction::CommitText(dk.standalone_char().to_string());
+            }
+            if gdk_key == gdk::Key::Escape {
+                return DeadKeyAction::PassThrough {
+                    clear_pending: true,
+                };
+            }
+            if let Some(ch) = gdk_key.to_unicode()
+                && !ch.is_control()
+            {
+                if let Some(composed) = dk.compose(ch) {
+                    return DeadKeyAction::CommitText(composed.to_string());
+                } else {
+                    return DeadKeyAction::CommitText(format!("{}{}", dk.standalone_char(), ch));
+                }
+            }
+            DeadKeyAction::PassThrough {
+                clear_pending: true,
+            }
+        }
+    }
 }
 
 #[allow(unused)]
@@ -530,5 +761,70 @@ pub(crate) fn retrieve_keyboard_key(gdk_key: gdk::Key) -> KeyboardKey {
             gdk::Key::KP_End => KeyboardKey::End,
             _ => KeyboardKey::Unsupported,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dead_key_acute_e() {
+        let a1 = process_dead_key(None, gdk::Key::dead_acute);
+        assert_eq!(a1, DeadKeyAction::ConsumedPending(DeadKey::Acute));
+
+        let a2 = process_dead_key(Some(DeadKey::Acute), gdk::Key::e);
+        assert_eq!(a2, DeadKeyAction::CommitText("é".to_string()));
+    }
+
+    #[test]
+    fn dead_key_grave_e() {
+        let a1 = process_dead_key(None, gdk::Key::dead_grave);
+        assert_eq!(a1, DeadKeyAction::ConsumedPending(DeadKey::Grave));
+
+        let a2 = process_dead_key(Some(DeadKey::Grave), gdk::Key::e);
+        assert_eq!(a2, DeadKeyAction::CommitText("è".to_string()));
+    }
+
+    #[test]
+    fn dead_key_circumflex_standalone_and_latex() {
+        // ^ + space -> ^
+        assert_eq!(
+            process_dead_key(Some(DeadKey::Circumflex), gdk::Key::space),
+            DeadKeyAction::CommitText("^".to_string())
+        );
+        // ^ + ^ -> ^
+        assert_eq!(
+            process_dead_key(Some(DeadKey::Circumflex), gdk::Key::dead_circumflex),
+            DeadKeyAction::CommitText("^".to_string())
+        );
+        // ^ + 2 -> ^2 (for LaTeX x^2)
+        assert_eq!(
+            process_dead_key(Some(DeadKey::Circumflex), gdk::Key::_2),
+            DeadKeyAction::CommitText("^2".to_string())
+        );
+        // ^ + { -> ^{ (for LaTeX x^{n})
+        assert_eq!(
+            process_dead_key(Some(DeadKey::Circumflex), gdk::Key::braceleft),
+            DeadKeyAction::CommitText("^{".to_string())
+        );
+    }
+
+    #[test]
+    fn dead_key_tilde_and_diaeresis() {
+        assert_eq!(
+            process_dead_key(Some(DeadKey::Tilde), gdk::Key::n),
+            DeadKeyAction::CommitText("ñ".to_string())
+        );
+        assert_eq!(
+            process_dead_key(Some(DeadKey::Diaeresis), gdk::Key::u),
+            DeadKeyAction::CommitText("ü".to_string())
+        );
+        assert_eq!(
+            process_dead_key(Some(DeadKey::Circumflex), gdk::Key::Shift_L),
+            DeadKeyAction::PassThrough {
+                clear_pending: false
+            }
+        );
     }
 }

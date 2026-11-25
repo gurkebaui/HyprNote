@@ -700,7 +700,8 @@ impl Typewriter {
                 let text_len = text.len();
                 text_style.ranged_text_attributes.clear();
                 text_style.set_max_width(Some(text_width));
-                let textstroke = TextStroke::new(text, pos, text_style);
+                let mut textstroke = TextStroke::new(text, pos, text_style);
+                textstroke.editing = true;
                 let cursor = GraphemeCursor::new(text_len, textstroke.text.len(), true);
 
                 let stroke_key = engine_view
@@ -727,7 +728,8 @@ impl Typewriter {
                 let text_len = text.len();
                 text_style.ranged_text_attributes.clear();
                 text_style.set_max_width(Some(text_width));
-                let textstroke = TextStroke::new(text, *pos, text_style);
+                let mut textstroke = TextStroke::new(text, *pos, text_style);
+                textstroke.editing = true;
                 let cursor = GraphemeCursor::new(text_len, textstroke.text.len(), true);
 
                 let stroke_key = engine_view
@@ -968,6 +970,27 @@ impl Typewriter {
             error!("Skipping blink task failed, Err: {e:?}");
         }
         self.cursor_visible = true;
+    }
+
+    /// Sets the editing flag on a `TextStroke`, updates its geometry, and regenerates its rendering.
+    pub(super) fn set_stroke_editing(
+        store: &mut crate::StrokeStore,
+        stroke_key: StrokeKey,
+        editing: bool,
+        camera: &Camera,
+    ) {
+        if let Some(Stroke::TextStroke(textstroke)) = store.get_stroke_mut(stroke_key) {
+            if textstroke.editing == editing {
+                return;
+            }
+            textstroke.editing = editing;
+            store.update_geometry_for_stroke(stroke_key);
+            store.regenerate_rendering_for_stroke(
+                stroke_key,
+                camera.viewport(),
+                camera.image_scale(),
+            );
+        }
     }
 }
 

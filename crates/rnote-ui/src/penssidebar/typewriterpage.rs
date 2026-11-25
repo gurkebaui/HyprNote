@@ -29,6 +29,8 @@ mod imp {
         #[template_child]
         pub(crate) text_strikethrough_button: TemplateChild<Button>,
         #[template_child]
+        pub(crate) markdown_togglebutton: TemplateChild<ToggleButton>,
+        #[template_child]
         pub(crate) text_align_start_togglebutton: TemplateChild<ToggleButton>,
         #[template_child]
         pub(crate) text_align_center_togglebutton: TemplateChild<ToggleButton>,
@@ -210,6 +212,29 @@ impl RnTypewriterPage {
             }
         ));
 
+        // Markdown & LaTeX
+        imp.markdown_togglebutton.connect_active_notify(clone!(
+            #[weak]
+            appwindow,
+            move |togglebutton| {
+                let active = togglebutton.is_active();
+                let Some(canvas) = appwindow.active_tab_canvas() else {
+                    return;
+                };
+                appwindow
+                    .engine_config()
+                    .write()
+                    .pens_config
+                    .typewriter_config
+                    .text_style
+                    .markdown_enabled = active;
+                let widget_flags = canvas
+                    .engine_mut()
+                    .text_selection_change_style(|style| style.markdown_enabled = active);
+                appwindow.handle_widget_flags(widget_flags, &canvas);
+            }
+        ));
+
         // Alignment
         imp.text_align_start_togglebutton
             .connect_active_notify(clone!(
@@ -324,6 +349,9 @@ impl RnTypewriterPage {
 
         imp.font_size_spinbutton
             .set_value(typewriter_config.text_style.font_size);
+
+        imp.markdown_togglebutton
+            .set_active(typewriter_config.text_style.markdown_enabled);
 
         self.set_alignment(typewriter_config.text_style.alignment);
     }

@@ -14,9 +14,9 @@ use chrono::prelude::*;
 use futures::StreamExt;
 use gettextrs::gettext;
 use gtk4::{
-    Adjustment, DropTarget, EventControllerKey, EventControllerLegacy, IMMulticontext,
-    PropagationPhase, Scrollable, ScrollablePolicy, ScrolledWindow, Widget, gdk, gio, glib,
-    glib::clone, graphene, prelude::*, subclass::prelude::*,
+    Adjustment, DropTarget, EventControllerFocus, EventControllerKey, EventControllerLegacy,
+    IMMulticontext, PropagationPhase, Scrollable, ScrollablePolicy, ScrolledWindow, Widget, gdk,
+    gio, glib, glib::clone, graphene, prelude::*, subclass::prelude::*,
 };
 use notify::EventKind;
 use notify::event::{AccessKind, AccessMode, ModifyKind, RenameMode};
@@ -77,6 +77,8 @@ mod imp {
         pub(crate) pointer_controller: EventControllerLegacy,
         pub(crate) key_controller: EventControllerKey,
         pub(crate) key_controller_im_context: IMMulticontext,
+        pub(crate) focus_controller: EventControllerFocus,
+        pub(crate) dead_key_composer: Cell<Option<super::input::DeadKey>>,
         pub(crate) drop_target: DropTarget,
         pub(crate) drawing_cursor_enabled: Cell<bool>,
 
@@ -112,6 +114,9 @@ mod imp {
                 .build();
 
             let key_controller_im_context = IMMulticontext::new();
+            key_controller_im_context.set_use_preedit(false);
+
+            let focus_controller = EventControllerFocus::new();
 
             let drop_target = DropTarget::builder()
                 .name("canvas_drop_target")
@@ -176,6 +181,8 @@ mod imp {
                 pointer_controller,
                 key_controller,
                 key_controller_im_context,
+                focus_controller,
+                dead_key_composer: Cell::new(None),
                 drop_target,
                 drawing_cursor_enabled: Cell::new(false),
 
@@ -232,6 +239,7 @@ mod imp {
 
             obj.add_controller(self.pointer_controller.clone());
             obj.add_controller(self.key_controller.clone());
+            obj.add_controller(self.focus_controller.clone());
             obj.add_controller(self.drop_target.clone());
 
             // receive and handle engine tasks
@@ -564,6 +572,27 @@ mod imp {
                 obj,
                 move |_key_controller, key, _raw, modifier| {
                     super::input::handle_key_controller_key_released(&canvas, key, modifier)
+                }
+            ));
+
+            self.focus_controller.connect_enter(clone!(
+                #[weak(rename_to=canvas)]
+                obj,
+                move |_| {
+                    if canvas.imp().text_input_enabled.get() {
+                        canvas.imp().key_controller_im_context.focus_in();
+                    }
+                }
+            ));
+
+            self.focus_controller.connect_leave(clone!(
+                #[weak(rename_to=canvas)]
+                obj,
+                move |_| {
+                    canvas.imp().dead_key_composer.set(None);
+                    if canvas.imp().text_input_enabled.get() {
+                        canvas.imp().key_controller_im_context.focus_out();
+                    }
                 }
             ));
         }
@@ -1001,6 +1030,7 @@ impl RnCanvas {
                 self.imp().key_controller_im_context.focus_in();
             }
         } else {
+            self.imp().dead_key_composer.set(None);
             // flush any pending composition before detaching
             self.imp().key_controller_im_context.reset();
             // Focus must be removed so that the IME context can unregister its window message filter.

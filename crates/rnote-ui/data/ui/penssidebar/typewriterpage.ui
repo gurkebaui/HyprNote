@@ -118,6 +118,21 @@
       </object>
     </child>
     <child>
+      <object class="GtkToggleButton" id="markdown_togglebutton">
+        <property name="icon-name">workspacelistentryicon-code-symbolic</property>
+        <property name="tooltip_text" translatable="yes">Markdown &amp; LaTeX</property>
+        <property name="active">true</property>
+        <style>
+          <class name="flat" />
+        </style>
+      </object>
+    </child>
+    <child>
+      <object class="GtkSeparator">
+        <property name="orientation">vertical</property>
+      </object>
+    </child>
+    <child>
       <object class="GtkBox">
         <property name="orientation">vertical</property>
         <style>
